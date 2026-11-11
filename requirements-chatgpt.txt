@@ -1,0 +1,2 @@
+# Optional: only required for direct ChatGPT OAuth. Local solver needs no packages.
+PyJWT[crypto]>=2.10,<3

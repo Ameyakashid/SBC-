@@ -1,0 +1,48 @@
+'use strict';
+// Isolated actual-handler checks, NOT browser/rendering or real-auth verification.
+const fs=require('fs'), vm=require('vm'), assert=require('assert');
+const source=fs.readFileSync(__dirname+'/static/app.js','utf8');
+const nodes={};
+const $=id=>nodes[id]??={value:'',checked:false,innerHTML:'',textContent:'',listeners:{},addEventListener(event,fn){this.listeners[event]=fn}};
+const context={$,players:[{id:'owned'}],constraints:()=>({squadSize:2}),message(){}};
+vm.createContext(context);
+function line(prefix){const result=source.split('\n').find(x=>x.startsWith(prefix));assert(result,`Missing handler ${prefix}`);return result;}
+vm.runInContext(source.slice(source.indexOf('function advisorData(){'),source.indexOf('function renderAdvice(')),context);
+$('sbc-brief').value='Example brief';$('platform').value='pc';$('advisor-budget').value='200';
+assert(!('constraints' in context.advisorData()));
+$('advisor-use-checks').checked=true;
+assert.equal(context.advisorData().constraints.squadSize,2);
+assert.equal(context.advisorData().consentToWholeClubSharing,false);
+$('whole-club-consent').checked=true;
+assert.equal(context.advisorData().consentToWholeClubSharing,true);
+$('market-snapshot').value='{bad';
+assert.throws(()=>context.advisorData(),/valid JSON/);
+$('market-snapshot').value='';
+vm.runInContext(line("$('demo-brief').onclick="),context);
+$('advisor-result').innerHTML='OLD ADVICE';$('share-preview').textContent='OLD PREVIEW';$('market-snapshot').value='OLD QUOTES';
+$('demo-brief').onclick();
+assert(!$('advisor-result').innerHTML.includes('OLD ADVICE'));
+assert.equal($('share-preview').textContent,'');assert.equal($('market-snapshot').value,'');assert.equal($('platform').value,'pc');
+vm.runInContext(line("for(const id of ['sbc-brief'"),context);
+assert($('advisor-use-checks').listeners.input,'Numeric toggle must invalidate advice');
+$('advisor-result').innerHTML='OLD ADVICE';$('share-preview').textContent='OLD PREVIEW';
+$('advisor-use-checks').listeners.input();
+assert(!$('advisor-result').innerHTML.includes('OLD ADVICE'));assert.equal($('share-preview').textContent,'');
+vm.runInContext(line("$('preview-advisor').onclick="),context);
+$('preview-advisor').onclick();assert($('share-preview').textContent.includes('squadSize'));
+$('advisor-use-checks').checked=false;$('preview-advisor').onclick();assert($('share-preview').textContent.includes('not included'));
+console.log('PASS isolated UI handlers: optional constraints, consent payload, malformed market, demo freshness, toggle freshness, sharing preview. Not browser QA.');
+(async()=>{
+ let calls=0,complete,rendered=0;
+ context.authBusy=false;context.renderAdvice=()=>rendered++;
+ context.api=()=>{calls++;return new Promise(resolve=>complete=resolve)};
+ $('models').value='mock-model';$('whole-club-consent').checked=true;
+ vm.runInContext(line("$('ask-advisor').onclick="),context);
+ const first=$('ask-advisor').onclick();
+ await $('ask-advisor').onclick();assert.equal(calls,1,'Repeated click must not issue another model request');
+ $('sbc-brief').value+=' Changed while pending';complete({});await first;
+ assert.equal(rendered,0,'Advice for outdated input must be discarded');assert.equal(context.authBusy,false);
+ assert($('advisor-progress').textContent.includes('discarded'));
+ $('whole-club-consent').checked=false;await $('ask-advisor').onclick();assert.equal(calls,1,'No consent must prevent request');
+ console.log('PASS isolated async UI: repeated-click guard, changed-input discard, missing-consent no request.');
+})().catch(e=>{console.error(e);process.exitCode=1});
